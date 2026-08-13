@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       publishToRelease:
-        description: '构建完成后是否发布到 GitHub Release（勾选=是；需要先在仓库里打一个 v* 标签）'
+        description: '构建完成后是否发布到 GitHub Release（勾选=是；需要先在仓库里打一个 v* 标签才会找到对应 Release）'
         required: false
         type: boolean
         default: false
       versionTag:
-        description: '要发布到哪个标签，例如 v1.0.0（publishToRelease 勾选时填；留空=使用当前仓库最新的 v* tag）'
+        description: '要发布到哪个标签，例如 v1.0.0（publishToRelease 勾选时必填；留空且勾选时使用当前最新 tag）'
         required: false
         default: ''
 
@@ -54,11 +54,7 @@ jobs:
 
       - name: Type check & Lint
         shell: pwsh
-        run: |
-          npm run typecheck
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run lint
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: npm run typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run lint; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare Baidu OCR credentials (optional GitHub Secrets)
         shell: pwsh
@@ -99,40 +95,31 @@ jobs:
       - name: Build app and pack Windows installer (electron-builder --win)
         shell: pwsh
         env:
+          # 使用 GitHub 缓存了的 electron 二进制，避免每次下载
           ELECTRON_CACHE: ${{ runner.temp }}\electron-cache
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          # 禁止自动 publish，我们单独做 artifacts / GitHub Release
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          $ErrorActionPreference = 'Stop'
           npm run build:win
 
       - name: List release artifacts
         shell: pwsh
         run: |
-          Get-ChildItem -Path release -Recurse -ErrorAction SilentlyContinue |
-            Select-Object FullName, Length |
-            Format-Table -AutoSize
+          Get-ChildItem -Path release -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
 
-      - name: Read package version
-        id: pkg
+      - name: Determine artifact name suffix
+        id: artifact
         shell: pwsh
         run: |
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $ver = $pkg.version
-          $productName = $pkg.PSObject.Properties.Name -contains 'productName' ? $pkg.productName : $pkg.name
-          Write-Host "version=$ver"
-          Write-Host "productName=$productName"
-          "version=$ver"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "productName=$productName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # 说明：electron-builder 默认输出目录是 release/，不是 dist/
-      # artifactName（electron-builder.yml） = ${productName}-${version}-setup.exe
-      # 且 productName 当前为 "Leetools"（无空格，见 electron-builder.yml L2），
-      # 所以这里用通配符 *setup.exe 匹配，避免手写出错。
-      - name: Upload build artifacts (Windows setup + latest update manifest)
+      - name: Upload build artifacts (Windows setup + unpacked dir as zip)
         uses: actions/upload-artifact@v7
         with:
-          name: Leetools-${{ steps.pkg.outputs.version }}-win-${{ matrix.arch }}
+          name: Leetools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}
           path: |
             dist/*.exe
             dist/*.yml
@@ -144,7 +131,7 @@ jobs:
       - name: Upload unpacked portable directory (optional debugging)
         uses: actions/upload-artifact@v7
         with:
-          name: Leetools-${{ steps.pkg.outputs.version }}-win-${{ matrix.arch }}-unpacked
+          name: Leetools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}-unpacked
           path: release/win-unpacked/**
           if-no-files-found: ignore
           retention-days: 14
@@ -154,12 +141,12 @@ jobs:
         if: inputs.publishToRelease == true
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = ("${{ inputs.versionTag }}").Trim()
+          $tag = "${{ inputs.versionTag }}".Trim()
           if ([string]::IsNullOrWhiteSpace($tag)) {
+            # 用户没指定 tag：默认取当前 HEAD 上最新的以 v 开头的 tag
             $tag = git tag --list 'v*' --sort=-creatordate | Select-Object -First 1
             if ([string]::IsNullOrWhiteSpace($tag)) {
-              Write-Error "未找到任何 v* 标签，请先打一个 tag 并推送到远端。例如：`ngit tag -a v1.0.0 -m 'v1.0.0'; git push origin v1.0.0"
+              Write-Error "未找到任何 v* 标签，请先在仓库里打一个 tag（例如 git tag -a v1.0.0 -m 'v1.0.0'; git push origin v1.0.0）"
               exit 1
             }
           }
@@ -167,10 +154,10 @@ jobs:
             Write-Error "标签 $tag 必须以 v 开头，例如 v1.0.0"
             exit 1
           }
-          Write-Host "目标 Release tag: $tag"
+          Write-Host "将发布到 Release 标签：$tag"
           "releaseTag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Publish to GitHub Release
+      - name: Publish to GitHub Release (manual only)
         if: inputs.publishToRelease == true
         uses: softprops/action-gh-release@v2
         with:
@@ -178,8 +165,8 @@ jobs:
           name: Release ${{ steps.tag.outputs.releaseTag }}
           files: |
             release/*-setup.exe
-            release/latest.yml
-            release/dev-app-update.yml
+            release/*.yml
+            release/*.yaml
           generate_release_notes: true
           fail_on_unmatched_files: true
         env:
