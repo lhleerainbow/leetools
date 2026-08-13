@@ -1,0 +1,140 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      publishToRelease:
+        description: '构建完成后是否发布到 GitHub Release（勾选=是；需要先在仓库里打一个 v* 标签才会找到对应 Release）'
+        required: false
+        type: boolean
+        default: false
+      versionTag:
+        description: '要发布到哪个标签，例如 v1.0.0（publishToRelease 勾选时必填；留空且勾选时使用当前最新 tag）'
+        required: false
+        default: ''
+
+jobs:
+  build-windows:
+    name: Build Windows (NSIS installer)
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64] # x86 需要额外构建 32 位 Node，有需要再扩展
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          check-latest: true
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python for native modules (optional, for electron-rebuild)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Visual Studio Build Tools (msvc) for native addons
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install npm dependencies
+        shell: pwsh
+        run: |
+          # GitHub Actions 默认使用 npm registry，electron/electron-builder 二进制包也有官方镜像
+          # 这里覆盖 .npmrc 中的 npmmirror，避免在 CI 网络下回源超时
+          @'
+          always-auth=false
+          '@ | Set-Content -Path .npmrc -Encoding UTF8
+          npm ci --no-audit --no-fund --loglevel=error
+
+      - name: Type check & Lint
+        shell: pwsh
+        run: npm run typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run lint; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build app and pack Windows installer (electron-builder --win)
+        shell: pwsh
+        env:
+          # 使用 GitHub 缓存了的 electron 二进制，避免每次下载
+          ELECTRON_CACHE: ${{ runner.temp }}\electron-cache
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          # 禁止自动 publish，我们单独做 artifacts / GitHub Release
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run build:win
+
+      - name: List release artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path release -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Determine artifact name suffix
+        id: artifact
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $ver = $pkg.version
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload build artifacts (Windows setup + unpacked dir as zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lee-tools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}
+          path: |
+            release/Lee tools-${{ steps.artifact.outputs.version }}-setup.exe
+            release/*.yml
+            release/*.yaml
+            !release/win-unpacked
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload unpacked portable directory (optional debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lee-tools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}-unpacked
+          path: release/win-unpacked/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Resolve target tag for GitHub Release
+        id: tag
+        if: inputs.publishToRelease == true
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.versionTag }}".Trim()
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            # 用户没指定 tag：默认取当前 HEAD 上最新的以 v 开头的 tag
+            $tag = git tag --list 'v*' --sort=-creatordate | Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($tag)) {
+              Write-Error "未找到任何 v* 标签，请先在仓库里打一个 tag（例如 git tag -a v1.0.0 -m 'v1.0.0'; git push origin v1.0.0）"
+              exit 1
+            }
+          }
+          if ($tag -notmatch '^v') {
+            Write-Error "标签 $tag 必须以 v 开头，例如 v1.0.0"
+            exit 1
+          }
+          Write-Host "将发布到 Release 标签：$tag"
+          "releaseTag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Publish to GitHub Release (manual only)
+        if: inputs.publishToRelease == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.releaseTag }}
+          name: Release ${{ steps.tag.outputs.releaseTag }}
+          files: |
+            release/Lee tools-${{ steps.artifact.outputs.version }}-setup.exe
+            release/*.yml
+            release/*.yaml
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

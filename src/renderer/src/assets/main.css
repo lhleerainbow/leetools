@@ -1,0 +1,37 @@
+@import './base.css';
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  /* 覆盖 base.css 中 body 的 min-height:100vh，避免高度溢出 */
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  /* 不使用 position:fixed inset:0：Electron 中会让部分含有 flex 的子组件
+     computed height 退化为 auto，导致 height:100% / absolute 容器塌缩为 0；
+     这里改用更保守的 html/body/#app 三层 100% + overflow:hidden 组合来锁视口。 */
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  display: block;
+}

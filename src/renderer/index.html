@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lee tools</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- 修改这里的 content 内容 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'unsafe-inline' *; img-src 'self' data: blob: *; connect-src * data: file:; script-src 'self' 'wasm-unsafe-eval' * 'unsafe-inline' blob:; worker-src 'self' blob:;"
+    />
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
