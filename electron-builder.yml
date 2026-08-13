@@ -1,5 +1,5 @@
 appId: com.leetools.app
-productName: Lee tools
+productName: Leetools
 directories:
   buildResources: build
 files:

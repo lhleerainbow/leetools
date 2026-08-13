@@ -88,10 +88,10 @@ jobs:
         with:
           name: Lee-tools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}
           path: |
-            release/*.exe
-            release/*.yml
-            release/*.yaml
-            !release/win-unpacked
+            dist/*.exe
+            dist/*.yml
+            dist/*.yaml
+            !dist/win-unpacked
           if-no-files-found: error
           retention-days: 90
 
