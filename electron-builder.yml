@@ -7,10 +7,14 @@ files:
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!.env'                              # 项目根目录的 .env（本地开发）绝不打包
+  - '!.env.*'                            # 本地开发的 .env.local 等也绝不打包
+  - '!{.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # CI 构建时会把百度 OCR 凭证写入 resources/.env —— 这个是要进安装包的，所以一定要包含
+  - 'resources/.env'
 asarUnpack:
-  - resources/**
+  - resources/**                         # resources/.env 会落在 process.resourcesPath/.env，不在 asar 内
 win:
   executableName: LeeTools
 nsis:

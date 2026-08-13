@@ -7,6 +7,6 @@ out
 .vscode
 
 # 百度 OCR 凭证（包含敏感信息，请勿提交）
-#.env
+.env
 .env.local
 .env.*.local

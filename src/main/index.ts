@@ -72,50 +72,108 @@ function closeTcp(clientId: string): void {
 }
 
 // ============================================================================
-// 一、环境变量（.env）加载
+// 一、百度 OCR 凭证读取
 // 说明：百度 Secret Key 必须只存在于主进程，绝不能被打进渲染层代码。
-// 这里手动加载 .env（不依赖额外依赖），并保留已存在的真实环境变量优先级。
-// 通过方括号 process.env[key] 访问，避免被构建期静态替换。
+//
+// 凭证来源与优先级（从高到低）：
+//   1. process.env —— 包括 CI 注入、启动时的环境变量
+//   2. userData 目录下的 config.json —— 给最终用户手动填密钥留口子（本地不改源码也能配）
+//   3. 打包后 resources/.env —— CI 构建时通过 GitHub Secrets 写入并随安装包分发
+//   4. 项目根目录 .env / process.cwd()/.env —— 本地开发用
+//
+// 不使用编译期替换，避免 Secret 被打进渲染进程 bundle。
 // ============================================================================
-function loadEnvFile(): void {
-  const candidates: string[] = [
-    resolve(__dirname, '..', '..', '.env'), // dev: out/main -> 项目根
-    resolve(process.cwd(), '.env'),
-    app.isPackaged ? join(process.resourcesPath, '.env') : '',
-    join(app.getAppPath(), '.env')
-  ].filter(Boolean) as string[]
+interface UserConfig {
+  BAIDU_OCR_API_KEY?: string
+  BAIDU_OCR_SECRET_KEY?: string
+}
 
-  for (const p of candidates) {
-    if (!existsSync(p)) continue
+function userConfigPath(): string {
+  return join(app.getPath('userData'), 'config.json')
+}
+
+function loadUserConfig(): UserConfig {
+  try {
+    const p = userConfigPath()
+    if (!existsSync(p)) return {}
     const content = readFileSync(p, 'utf-8')
-    for (const line of content.split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)?\s*$/)
-      if (!m) continue
-      const key = m[1]
-      let val = (m[2] ?? '').trim()
-      if (
-        (val.startsWith('"') && val.endsWith('"')) ||
-        (val.startsWith("'") && val.endsWith("'"))
-      ) {
-        val = val.slice(1, -1)
-      }
-      // 已存在的真实环境变量优先
-      if (process.env[key] === undefined) process.env[key] = val
-    }
-    break
+    const obj = JSON.parse(content) as unknown
+    if (!obj || typeof obj !== 'object') return {}
+    return obj as UserConfig
+  } catch {
+    return {}
   }
 }
-loadEnvFile()
 
-function getCred(key: string): string {
-  const v = process.env[key]
-  if (!v) {
-    throw new Error(
-      `未配置百度OCR凭证：缺少环境变量 ${key}。请在项目根目录创建 .env 文件并配置 ` +
-        `BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY（可参考 .env.example）。`
-    )
+let userConfigCache: UserConfig | null = null
+function cachedUserConfig(): UserConfig {
+  if (userConfigCache === null) userConfigCache = loadUserConfig()
+  return userConfigCache
+}
+
+function applyEnvFile(path: string): boolean {
+  if (!path || !existsSync(path)) return false
+  const content = readFileSync(path, 'utf-8')
+  for (const line of content.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)?\s*$/)
+    if (!m) continue
+    const key = m[1]
+    let val = (m[2] ?? '').trim()
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
+    // 仅当 process.env 中尚未设置时才用 .env 兜底（环境变量优先级最高）
+    if (process.env[key] === undefined) process.env[key] = val
   }
-  return v
+  return true
+}
+
+function loadEnvFilesEarly(): void {
+  // 开发态：优先找项目根目录
+  const devCandidates: string[] = [
+    resolve(__dirname, '..', '..', '.env'), // dev: out/main/index.js -> 项目根
+    resolve(process.cwd(), '.env')
+  ].filter(Boolean) as string[]
+  for (const p of devCandidates) {
+    if (applyEnvFile(p)) return
+  }
+  // 打包态：electron-builder 把 resources 目录整个拷贝到 process.resourcesPath
+  // 并且 asarUnpack: resources/** —— .env 不在 asar 里，直接文件读取
+  if (app.isPackaged && process.resourcesPath) {
+    applyEnvFile(join(process.resourcesPath, '.env'))
+  }
+}
+loadEnvFilesEarly()
+
+/**
+ * 读取凭证。返回 { ok: true, value } 或 { ok: false, hint }，
+ * 不再 throw，上层 OCR IPC 拿到 hint 后通过 ElMessage 友好提示用户。
+ */
+function getCred(key: keyof UserConfig): { ok: true; value: string } | { ok: false; hint: string } {
+  // 1) 进程环境变量（CI注入 / 启动脚本）优先级最高
+  const fromEnv = process.env[key]
+  if (fromEnv && fromEnv.trim()) return { ok: true, value: fromEnv.trim() }
+  // 2) 用户自己在 userData/config.json 写的密钥
+  const fromUser = cachedUserConfig()[key]
+  if (fromUser && fromUser.trim()) return { ok: true, value: fromUser.trim() }
+  // 3) .env 在打包 resources 里
+  // （已经在 loadEnvFilesEarly -> applyEnvFile 里写到 process.env[key] 过了，这里兜底）
+  const fromEnvFinal = process.env[key]
+  if (fromEnvFinal && fromEnvFinal.trim()) return { ok: true, value: fromEnvFinal.trim() }
+
+  const paths: string[] = []
+  paths.push(userConfigPath())
+  if (app.isPackaged && process.resourcesPath) paths.push(join(process.resourcesPath, '.env'))
+  paths.push(resolve(__dirname, '..', '..', '.env'))
+  const example =
+    `方式一（给每台机器单独配置，推荐）：在 "${userConfigPath()}" 写入 ` +
+    `{ "BAIDU_OCR_API_KEY": "...", "BAIDU_OCR_SECRET_KEY": "..." }，重启应用生效。` +
+    `方式二（随安装包分发，开发者构建时在 GitHub Secrets 配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY 再打包）。` +
+    `方式三（本地开发）：项目根目录写 .env 文件并填 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY。`
+  return {
+    ok: false,
+    hint: `未配置百度OCR凭证：缺少 ${key}。${example}`
+  }
 }
 
 // ============================================================================
@@ -133,8 +191,13 @@ let tokenCache: TokenCache | null = null
 async function getAccessToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) return tokenCache.token
 
-  const apiKey = getCred('BAIDU_OCR_API_KEY')
-  const secretKey = getCred('BAIDU_OCR_SECRET_KEY')
+  const apiKeyResult = getCred('BAIDU_OCR_API_KEY')
+  if (!apiKeyResult.ok) throw new Error(apiKeyResult.hint)
+  const secretKeyResult = getCred('BAIDU_OCR_SECRET_KEY')
+  if (!secretKeyResult.ok) throw new Error(secretKeyResult.hint)
+
+  const apiKey = apiKeyResult.value
+  const secretKey = secretKeyResult.value
   const url =
     'https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials' +
     `&client_id=${encodeURIComponent(apiKey)}` +

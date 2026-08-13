@@ -59,6 +59,41 @@ jobs:
         shell: pwsh
         run: npm run typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run lint; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Prepare Baidu OCR credentials (optional GitHub Secrets)
+        shell: pwsh
+        env:
+          BAIDU_OCR_API_KEY: ${{ secrets.BAIDU_OCR_API_KEY }}
+          BAIDU_OCR_SECRET_KEY: ${{ secrets.BAIDU_OCR_SECRET_KEY }}
+        run: |
+          # 只有当 BAIDU_OCR_API_KEY 与 BAIDU_OCR_SECRET_KEY 两个 Secrets 都配置了才写 resources/.env
+          # 这样开发者不配也不会影响构建；配了就会把凭证打进安装包的 resources/.env，应用运行期读取
+          $apiKey = ($env:BAIDU_OCR_API_KEY ?? '').Trim()
+          $secret = ($env:BAIDU_OCR_SECRET_KEY ?? '').Trim()
+          $resDir = Join-Path (Get-Location) "resources"
+          if (-not (Test-Path $resDir)) {
+            New-Item -ItemType Directory -Path $resDir -Force | Out-Null
+          }
+          $envPath = Join-Path $resDir ".env"
+          if ([string]::IsNullOrWhiteSpace($apiKey) -or [string]::IsNullOrWhiteSpace($secret)) {
+            Write-Host "⚠️  GitHub Secrets 未配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY，将不写入 resources/.env"
+            Write-Host "   打包后的应用可以通过 userData/config.json 单独配置 OCR 密钥，其它功能不受影响。"
+            # 若 resources/.env 不存在，electron-builder.yml 中已经单独 include 了这一条，且 pattern 允许，
+            # 此时没有这个文件也不会报错（electron-builder 会忽略 include 的缺失文件）。
+            # 为避免 include 在某些 builder 版本 strict 模式下失败，若 resources 目录仍为空占位，保留一个安全的空 .env（内容注释），
+            # 它不会覆盖用户后续写入的凭证，因为 loadEnvFile 中以 process.env 优先。
+            if (-not (Test-Path $envPath)) {
+              "# Lee tools — placeholder .env`n# 请在 GitHub Secrets 或用户目录 config.json 中配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY`n" | `
+                Set-Content -Path $envPath -Encoding UTF8
+            }
+            exit 0
+          }
+          Write-Host "✅ 检测到 GitHub Secrets 中的 OCR 凭证，正在写入 resources/.env（会随安装包分发）"
+          @"
+BAIDU_OCR_API_KEY=$apiKey
+BAIDU_OCR_SECRET_KEY=$secret
+"@ | Set-Content -Path $envPath -Encoding UTF8
+          Write-Host "  resources/.env 已写入，大小: $([System.IO.FileInfo]::new($envPath).Length) bytes"
+
       - name: Build app and pack Windows installer (electron-builder --win)
         shell: pwsh
         env:
