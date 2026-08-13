@@ -13,9 +13,14 @@ files:
   - '!{.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   # CI 构建时会把百度 OCR 凭证写入 resources/.env —— 这个是要进安装包的，所以一定要包含
-  - 'resources/.env'
+  - resources/**/*
   - out/**/*
   - node_modules/**/*
+  - package.json
+extraResources:
+  - from: resources/
+    to: .
+    filter: ['*.env']  
 asarUnpack:
   - resources/**                         # resources/.env 会落在 process.resourcesPath/.env，不在 asar 内
 win:

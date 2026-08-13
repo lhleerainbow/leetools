@@ -6,6 +6,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import JSZip from 'jszip'
 import { PDFDocument } from 'pdf-lib'
 import icon from '../../resources/icon.png?asset'
+import * as fs from 'node:fs'
 
 // ============================================================================
 // 一、应用身份与数据目录（必须在任何读取 app.name / app.getPath 之前执行）
@@ -150,6 +151,17 @@ loadEnvFilesEarly()
  * 不再 throw，上层 OCR IPC 拿到 hint 后通过 ElMessage 友好提示用户。
  */
 function getCred(key: keyof UserConfig): { ok: true; value: string } | { ok: false; hint: string } {
+  // 调试：打印所有可能的路径
+  console.log('[DEBUG] app.isPackaged:', app.isPackaged);
+  console.log('[DEBUG] process.resourcesPath:', process.resourcesPath);
+  if (process.resourcesPath) {
+    const envPath = join(process.resourcesPath, '.env');
+    console.log('[DEBUG] envPath exists?', fs.existsSync(envPath));
+    if (fs.existsSync(envPath)) {
+      console.log('[DEBUG] envPath content:', fs.readFileSync(envPath, 'utf-8'));
+    }
+  }
+
   // 1) 进程环境变量（CI注入 / 启动脚本）优先级最高
   const fromEnv = process.env[key]
   if (fromEnv && fromEnv.trim()) return { ok: true, value: fromEnv.trim() }
