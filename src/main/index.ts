@@ -152,13 +152,13 @@ loadEnvFilesEarly()
  */
 function getCred(key: keyof UserConfig): { ok: true; value: string } | { ok: false; hint: string } {
   // 调试：打印所有可能的路径
-  console.log('[DEBUG] app.isPackaged:', app.isPackaged);
-  console.log('[DEBUG] process.resourcesPath:', process.resourcesPath);
+  console.log('[DEBUG] app.isPackaged:', app.isPackaged)
+  console.log('[DEBUG] process.resourcesPath:', process.resourcesPath)
   if (process.resourcesPath) {
-    const envPath = join(process.resourcesPath, '.env');
-    console.log('[DEBUG] envPath exists?', fs.existsSync(envPath));
+    const envPath = join(process.resourcesPath, '.env')
+    console.log('[DEBUG] envPath exists?', fs.existsSync(envPath))
     if (fs.existsSync(envPath)) {
-      console.log('[DEBUG] envPath content:', fs.readFileSync(envPath, 'utf-8'));
+      console.log('[DEBUG] envPath content:', fs.readFileSync(envPath, 'utf-8'))
     }
   }
 
