@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       publishToRelease:
-        description: '构建完成后是否发布到 GitHub Release（勾选=是；需要先在仓库里打一个 v* 标签才会找到对应 Release）'
+        description: '构建完成后是否发布到 GitHub Release（勾选=是；需要先在仓库里打一个 v* 标签）'
         required: false
         type: boolean
         default: false
       versionTag:
-        description: '要发布到哪个标签，例如 v1.0.0（publishToRelease 勾选时必填；留空且勾选时使用当前最新 tag）'
+        description: '要发布到哪个标签，例如 v1.0.0（publishToRelease 勾选时填；留空=使用当前仓库最新的 v* tag）'
         required: false
         default: ''
 
@@ -48,16 +48,17 @@ jobs:
       - name: Install npm dependencies
         shell: pwsh
         run: |
-          # GitHub Actions 默认使用 npm registry，electron/electron-builder 二进制包也有官方镜像
-          # 这里覆盖 .npmrc 中的 npmmirror，避免在 CI 网络下回源超时
-          @'
-          always-auth=false
-          '@ | Set-Content -Path .npmrc -Encoding UTF8
+          # 本仓库 .npmrc 使用 npmmirror 的 electron 镜像，CI 上回源到官方 registry 更稳定
+          Set-Content -Path .npmrc -Encoding utf8 -Value "always-auth=false`n"
           npm ci --no-audit --no-fund --loglevel=error
 
       - name: Type check & Lint
         shell: pwsh
-        run: npm run typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run lint; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare Baidu OCR credentials (optional GitHub Secrets)
         shell: pwsh
@@ -65,63 +66,73 @@ jobs:
           BAIDU_OCR_API_KEY: ${{ secrets.BAIDU_OCR_API_KEY }}
           BAIDU_OCR_SECRET_KEY: ${{ secrets.BAIDU_OCR_SECRET_KEY }}
         run: |
-          # 只有当 BAIDU_OCR_API_KEY 与 BAIDU_OCR_SECRET_KEY 两个 Secrets 都配置了才写 resources/.env
-          # 这样开发者不配也不会影响构建；配了就会把凭证打进安装包的 resources/.env，应用运行期读取
+          $ErrorActionPreference = 'Stop'
           $apiKey = ($env:BAIDU_OCR_API_KEY ?? '').Trim()
           $secret = ($env:BAIDU_OCR_SECRET_KEY ?? '').Trim()
-          $resDir = Join-Path (Get-Location) "resources"
+          $resDir = Join-Path (Get-Location) 'resources'
           if (-not (Test-Path $resDir)) {
             New-Item -ItemType Directory -Path $resDir -Force | Out-Null
           }
-          $envPath = Join-Path $resDir ".env"
+          $envPath = Join-Path $resDir '.env'
+
           if ([string]::IsNullOrWhiteSpace($apiKey) -or [string]::IsNullOrWhiteSpace($secret)) {
-            Write-Host "⚠️  GitHub Secrets 未配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY，将不写入 resources/.env"
-            Write-Host "   打包后的应用可以通过 userData/config.json 单独配置 OCR 密钥，其它功能不受影响。"
-            # 若 resources/.env 不存在，electron-builder.yml 中已经单独 include 了这一条，且 pattern 允许，
-            # 此时没有这个文件也不会报错（electron-builder 会忽略 include 的缺失文件）。
-            # 为避免 include 在某些 builder 版本 strict 模式下失败，若 resources 目录仍为空占位，保留一个安全的空 .env（内容注释），
-            # 它不会覆盖用户后续写入的凭证，因为 loadEnvFile 中以 process.env 优先。
-            if (-not (Test-Path $envPath)) {
-              "# Lee tools — placeholder .env`n# 请在 GitHub Secrets 或用户目录 config.json 中配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY`n" | `
-                Set-Content -Path $envPath -Encoding UTF8
-            }
+            Write-Host '===== GitHub Secrets 未配置 BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY ====='
+            Write-Host 'Tips: 打包后仍可通过 userData/config.json 单独配置 OCR 密钥，其它功能不受影响。'
+            $content = @(
+              '# Lee tools placeholder .env',
+              '# Fill via GitHub Secrets BAIDU_OCR_API_KEY / BAIDU_OCR_SECRET_KEY at build time',
+              '# Or write { "BAIDU_OCR_API_KEY":"...", "BAIDU_OCR_SECRET_KEY":"..." } into userData/config.json after install'
+            ) -join "`n"
+            Set-Content -Path $envPath -Encoding utf8 -Value $content
             exit 0
           }
-          Write-Host "✅ 检测到 GitHub Secrets 中的 OCR 凭证，正在写入 resources/.env（会随安装包分发）"
-          @"
-BAIDU_OCR_API_KEY=$apiKey
-BAIDU_OCR_SECRET_KEY=$secret
-"@ | Set-Content -Path $envPath -Encoding UTF8
-          Write-Host "  resources/.env 已写入，大小: $([System.IO.FileInfo]::new($envPath).Length) bytes"
+
+          Write-Host '===== GitHub Secrets OCR 凭据已检测到，写入 resources/.env（打包后随安装包分发）====='
+          $content = @(
+            "BAIDU_OCR_API_KEY=$apiKey",
+            "BAIDU_OCR_SECRET_KEY=$secret"
+          ) -join "`n"
+          Set-Content -Path $envPath -Encoding utf8 -Value $content
+          $len = (Get-Item $envPath).Length
+          Write-Host "Written $len bytes to $envPath"
 
       - name: Build app and pack Windows installer (electron-builder --win)
         shell: pwsh
         env:
-          # 使用 GitHub 缓存了的 electron 二进制，避免每次下载
           ELECTRON_CACHE: ${{ runner.temp }}\electron-cache
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
-          # 禁止自动 publish，我们单独做 artifacts / GitHub Release
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
+          $ErrorActionPreference = 'Stop'
           npm run build:win
 
       - name: List release artifacts
         shell: pwsh
         run: |
-          Get-ChildItem -Path release -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+          Get-ChildItem -Path release -Recurse -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
 
-      - name: Determine artifact name suffix
-        id: artifact
+      - name: Read package version
+        id: pkg
         shell: pwsh
         run: |
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $ver = $pkg.version
-          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $productName = $pkg.PSObject.Properties.Name -contains 'productName' ? $pkg.productName : $pkg.name
+          Write-Host "version=$ver"
+          Write-Host "productName=$productName"
+          "version=$ver"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "productName=$productName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Upload build artifacts (Windows setup + unpacked dir as zip)
+      # 说明：electron-builder 默认输出目录是 release/，不是 dist/
+      # artifactName（electron-builder.yml） = ${productName}-${version}-setup.exe
+      # 且 productName 当前为 "Leetools"（无空格，见 electron-builder.yml L2），
+      # 所以这里用通配符 *setup.exe 匹配，避免手写出错。
+      - name: Upload build artifacts (Windows setup + latest update manifest)
         uses: actions/upload-artifact@v7
         with:
-          name: Lee-tools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}
+          name: Leetools-${{ steps.pkg.outputs.version }}-win-${{ matrix.arch }}
           path: |
             dist/*.exe
             dist/*.yml
@@ -133,7 +144,7 @@ BAIDU_OCR_SECRET_KEY=$secret
       - name: Upload unpacked portable directory (optional debugging)
         uses: actions/upload-artifact@v7
         with:
-          name: Lee-tools-${{ steps.artifact.outputs.version }}-win-${{ matrix.arch }}-unpacked
+          name: Leetools-${{ steps.pkg.outputs.version }}-win-${{ matrix.arch }}-unpacked
           path: release/win-unpacked/**
           if-no-files-found: ignore
           retention-days: 14
@@ -143,12 +154,12 @@ BAIDU_OCR_SECRET_KEY=$secret
         if: inputs.publishToRelease == true
         shell: pwsh
         run: |
-          $tag = "${{ inputs.versionTag }}".Trim()
+          $ErrorActionPreference = 'Stop'
+          $tag = ("${{ inputs.versionTag }}").Trim()
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            # 用户没指定 tag：默认取当前 HEAD 上最新的以 v 开头的 tag
             $tag = git tag --list 'v*' --sort=-creatordate | Select-Object -First 1
             if ([string]::IsNullOrWhiteSpace($tag)) {
-              Write-Error "未找到任何 v* 标签，请先在仓库里打一个 tag（例如 git tag -a v1.0.0 -m 'v1.0.0'; git push origin v1.0.0）"
+              Write-Error "未找到任何 v* 标签，请先打一个 tag 并推送到远端。例如：`ngit tag -a v1.0.0 -m 'v1.0.0'; git push origin v1.0.0"
               exit 1
             }
           }
@@ -156,19 +167,19 @@ BAIDU_OCR_SECRET_KEY=$secret
             Write-Error "标签 $tag 必须以 v 开头，例如 v1.0.0"
             exit 1
           }
-          Write-Host "将发布到 Release 标签：$tag"
+          Write-Host "目标 Release tag: $tag"
           "releaseTag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Publish to GitHub Release (manual only)
+      - name: Publish to GitHub Release
         if: inputs.publishToRelease == true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.releaseTag }}
           name: Release ${{ steps.tag.outputs.releaseTag }}
           files: |
-            release/Lee tools-${{ steps.artifact.outputs.version }}-setup.exe
-            release/*.yml
-            release/*.yaml
+            release/*-setup.exe
+            release/latest.yml
+            release/dev-app-update.yml
           generate_release_notes: true
           fail_on_unmatched_files: true
         env:
