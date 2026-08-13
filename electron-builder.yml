@@ -2,6 +2,7 @@ appId: com.leetools.app
 productName: Leetools
 directories:
   buildResources: build
+  output: dist
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -13,6 +14,8 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   # CI 构建时会把百度 OCR 凭证写入 resources/.env —— 这个是要进安装包的，所以一定要包含
   - 'resources/.env'
+  - out/**/*
+  - node_modules/**/*
 asarUnpack:
   - resources/**                         # resources/.env 会落在 process.resourcesPath/.env，不在 asar 内
 win:
