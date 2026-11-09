@@ -18,7 +18,22 @@ contextBridge.exposeInMainWorld('pdfAPI', {
     ipcRenderer.invoke('pdf:merge', data),
 
   savePdf: (data: { pdfBase64: string; suggestedFileName: string }): Promise<unknown> =>
-    ipcRenderer.invoke('pdf:save', data)
+    ipcRenderer.invoke('pdf:save', data),
+
+  pageCount: (data: { buffer: ArrayBuffer }): Promise<unknown> =>
+    ipcRenderer.invoke('pdf:pageCount', data),
+
+  insertPdf: (data: {
+    baseBuffer: ArrayBuffer
+    insertBuffer: ArrayBuffer
+    position: number
+    outputFileName: string
+  }): Promise<unknown> => ipcRenderer.invoke('pdf:insert', data)
+})
+
+contextBridge.exposeInMainWorld('imageAPI', {
+  toPdf: (data: { images: ArrayBuffer[]; outputFileName: string }): Promise<unknown> =>
+    ipcRenderer.invoke('images:toPdf', data)
 })
 
 // TCP 客户端 API：invoke 调用 + on/off 事件
@@ -64,4 +79,6 @@ contextBridge.exposeInMainWorld('tcpAPI', {
   }
 })
 
-console.log('[Preload] ✅ contextBridge.exposeInMainWorld("ocrAPI"/"pdfAPI"/"tcpAPI") 已执行')
+console.log(
+  '[Preload] ✅ contextBridge.exposeInMainWorld("ocrAPI"/"pdfAPI"/"imageAPI"/"tcpAPI") 已执行'
+)

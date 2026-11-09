@@ -47,6 +47,34 @@ declare global {
         pdfBase64: string
         suggestedFileName: string
       }) => Promise<{ success: boolean; path?: string; error?: string }>
+      /** 读取单个 PDF 的总页数 */
+      pageCount: (data: { buffer: ArrayBuffer }) => Promise<{
+        success: boolean
+        error?: string
+        pageCount?: number
+      }>
+      /** 把 insertBuffer 对应的 PDF 插入到原 PDF 的指定位置，返回新 PDF 的 base64 */
+      insertPdf: (data: {
+        baseBuffer: ArrayBuffer
+        insertBuffer: ArrayBuffer
+        position: number
+        outputFileName: string
+      }) => Promise<{
+        success: boolean
+        error?: string
+        base64?: string
+        fileName?: string
+      }>
+    }
+    // 图片转 PDF API（由 preload 脚本通过 contextBridge 暴露）
+    imageAPI: {
+      /** 按传入顺序把多张图片（JPEG/PNG 字节）合并成一个 PDF，返回 base64 与文件名 */
+      toPdf: (data: { images: ArrayBuffer[]; outputFileName: string }) => Promise<{
+        success: boolean
+        error?: string
+        base64?: string
+        fileName?: string
+      }>
     }
     // TCP 客户端 API（由 preload 脚本通过 contextBridge 暴露）
     tcpAPI: {

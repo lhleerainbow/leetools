@@ -68,6 +68,10 @@
       />
       <!-- PDF 合并 -->
       <PdfMerge v-else-if="selectedMainMenu === 'tools' && selectedTool === 'pdf-merge'" />
+      <!-- PDF 插入 -->
+      <PdfInsert v-else-if="selectedMainMenu === 'tools' && selectedTool === 'pdf-insert'" />
+      <!-- 图片转 PDF -->
+      <ImageToPdf v-else-if="selectedMainMenu === 'tools' && selectedTool === 'image-to-pdf'" />
       <!-- TCP客户端详情 -->
       <TcpClientDetail
         v-else-if="selectedMainMenu === 'tcp-client'"
@@ -88,12 +92,14 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import ImageTableOCR from './components/ImageTableOCR.vue'
 import PdfMerge from './components/PdfMerge.vue'
+import PdfInsert from './components/PdfInsert.vue'
+import ImageToPdf from './components/ImageToPdf.vue'
 import TcpClientList, { type TcpClientConfig } from './components/TcpClientList.vue'
 import TcpClientDetail from './components/TcpClientDetail.vue'
 
 // --- 类型定义 ---
 type MainMenuKey = 'tcp-client' | 'tools'
-type ToolKey = 'pdf-merge' | 'image-table-ocr'
+type ToolKey = 'pdf-merge' | 'pdf-insert' | 'image-to-pdf' | 'image-table-ocr'
 
 interface MainMenuItem {
   key: MainMenuKey
@@ -118,6 +124,8 @@ const mainMenuItems: MainMenuItem[] = [
 
 const toolItems: ToolItem[] = [
   { key: 'pdf-merge', label: 'PDF合并', icon: '📄' },
+  { key: 'pdf-insert', label: 'PDF插入', icon: '📑' },
+  { key: 'image-to-pdf', label: '图片转PDF', icon: '🖼️' },
   { key: 'image-table-ocr', label: '图片表格识别', icon: '📷' }
 ]
 

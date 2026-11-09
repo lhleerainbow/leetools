@@ -719,6 +719,157 @@ ipcMain.handle(
 )
 
 // ============================================================================
+// 四-B-1、PDF 页数读取 + 插入合并 IPC 处理器
+// pdf:pageCount
+//   输入：单个 PDF 的字节；输出：该 PDF 的页数
+// pdf:insert
+//   输入：原 PDF 字节 + 待插入 PDF 字节 + 插入位置
+//         position = 0 表示插到最前面；position = N 表示插到第 N 页之后
+//   输出：合并后新 PDF 的 base64
+// ============================================================================
+ipcMain.handle(
+  'pdf:pageCount',
+  async (
+    _evt,
+    data: { buffer: ArrayBuffer }
+  ): Promise<{ success: boolean; error?: string; pageCount?: number }> => {
+    try {
+      if (!data?.buffer) return { success: false, error: '没有可解析的 PDF 数据' }
+      const doc = await PDFDocument.load(new Uint8Array(data.buffer))
+      const pageCount = doc.getPageCount()
+      console.log('[PDF-PageCount] ✅ 页数:', pageCount)
+      return { success: true, pageCount }
+    } catch (e) {
+      console.error('[PDF-PageCount] ❌ 解析异常:', e)
+      return { success: false, error: (e as Error).message || 'PDF 解析失败' }
+    }
+  }
+)
+
+ipcMain.handle(
+  'pdf:insert',
+  async (
+    _evt,
+    data: {
+      baseBuffer: ArrayBuffer
+      insertBuffer: ArrayBuffer
+      position: number
+      outputFileName: string
+    }
+  ): Promise<{ success: boolean; error?: string; base64?: string; fileName?: string }> => {
+    try {
+      const { baseBuffer, insertBuffer, position, outputFileName } = data || {}
+      if (!baseBuffer) return { success: false, error: '请先上传原 PDF 文件' }
+      if (!insertBuffer) return { success: false, error: '请先上传待插入的 PDF 文件' }
+
+      const baseDoc = await PDFDocument.load(new Uint8Array(baseBuffer))
+      const insertDoc = await PDFDocument.load(new Uint8Array(insertBuffer))
+
+      const baseCount = baseDoc.getPageCount()
+      const insertCount = insertDoc.getPageCount()
+      if (insertCount === 0) return { success: false, error: '待插入的 PDF 没有任何页面' }
+
+      // position 允许 0 ~ baseCount，超出范围时收敛到边界
+      const rawPos = Number.isFinite(position) ? Math.trunc(position) : baseCount
+      const insertIndex = Math.max(0, Math.min(rawPos, baseCount))
+
+      console.log(
+        `[PDF-Insert] 原 PDF ${baseCount} 页，待插入 ${insertCount} 页，插入到索引 ${insertIndex}`
+      )
+
+      const copiedPages = await baseDoc.copyPages(insertDoc, insertDoc.getPageIndices())
+      copiedPages.forEach((page, i) => baseDoc.insertPage(insertIndex + i, page))
+
+      const bytes = await baseDoc.save()
+      const base64 = Buffer.from(bytes).toString('base64')
+      console.log('[PDF-Insert] ✅ 合并完成，总页数:', baseDoc.getPageCount())
+      return { success: true, base64, fileName: outputFileName }
+    } catch (e) {
+      console.error('[PDF-Insert] ❌ 插入异常:', e)
+      return { success: false, error: (e as Error).message || '插入失败' }
+    }
+  }
+)
+
+// ============================================================================
+// 四-B-2、图片转 PDF IPC 处理器
+// images:toPdf
+//   输入：按顺序排列的图片字节（需为 JPEG / PNG；其它格式由渲染层先用 canvas 转成 PNG）
+//   输出：每张图片一页、按等比缩放居中放入 A4 页面，全部合并成一个 PDF 的 base64
+//   ready: 图片在渲染层已就绪（尺寸可读），主进程只负责排版与写 PDF
+// ============================================================================
+const A4_WIDTH = 595.28
+const A4_HEIGHT = 841.89
+const PAGE_MARGIN = 0 // A4 页内不留边距，图片按比例尽量铺满
+
+/** 通过文件头判断图片真实格式，避免扩展名/MIME 造假导致 pdf-lib 解析失败 */
+function sniffImageKind(buf: Buffer): 'jpeg' | 'png' | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpeg'
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'png'
+  }
+  return null
+}
+
+ipcMain.handle(
+  'images:toPdf',
+  async (
+    _evt,
+    data: { images: ArrayBuffer[]; outputFileName: string }
+  ): Promise<{ success: boolean; error?: string; base64?: string; fileName?: string }> => {
+    try {
+      const { images, outputFileName } = data || {}
+      if (!images || !images.length) {
+        return { success: false, error: '没有可转换的图片' }
+      }
+
+      console.log('[Images-ToPdf] 开始转换，图片数量:', images.length)
+      const pdfDoc = await PDFDocument.create()
+
+      for (let i = 0; i < images.length; i++) {
+        const buf = Buffer.from(new Uint8Array(images[i]))
+        const kind = sniffImageKind(buf)
+        if (!kind) {
+          return {
+            success: false,
+            error: `第 ${i + 1} 张图片格式不支持（仅支持 JPEG / PNG），请重新选择`
+          }
+        }
+        try {
+          const embedded = kind === 'jpeg' ? await pdfDoc.embedJpg(buf) : await pdfDoc.embedPng(buf)
+          const page = pdfDoc.addPage([A4_WIDTH, A4_HEIGHT])
+          const maxW = A4_WIDTH - PAGE_MARGIN * 2
+          const maxH = A4_HEIGHT - PAGE_MARGIN * 2
+          const scale = Math.min(maxW / embedded.width, maxH / embedded.height)
+          const drawW = embedded.width * scale
+          const drawH = embedded.height * scale
+          page.drawImage(embedded, {
+            x: (A4_WIDTH - drawW) / 2,
+            y: (A4_HEIGHT - drawH) / 2,
+            width: drawW,
+            height: drawH
+          })
+        } catch (err) {
+          console.error(`[Images-ToPdf] 第 ${i + 1} 张图片处理失败:`, err)
+          return {
+            success: false,
+            error: `第 ${i + 1} 张图片解析失败：${(err as Error).message || '未知错误'}`
+          }
+        }
+      }
+
+      const bytes = await pdfDoc.save()
+      const base64 = Buffer.from(bytes).toString('base64')
+      console.log('[Images-ToPdf] ✅ 转换完成，base64 长度:', base64.length)
+      return { success: true, base64, fileName: outputFileName }
+    } catch (e) {
+      console.error('[Images-ToPdf] ❌ 转换异常:', e)
+      return { success: false, error: (e as Error).message || '转换失败' }
+    }
+  }
+)
+
+// ============================================================================
 // 四-C、TCP IPC 处理器
 // tcp:connect    → 对某 clientId 发起连接，返回 {success, error?}
 // tcp:disconnect → 主动断开
